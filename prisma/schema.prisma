@@ -1,0 +1,357 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+generator erd {
+  provider = "prisma-erd-generator"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id              String    @id @default(cuid())
+  email           String    @unique
+  name            String?
+  hashedPassword  String?
+  image           String?
+  emailVerified   DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  // Relations
+  playbooks       Playbook[]
+  contracts       Contract[]
+  reviews         Review[]
+  comments        Comment[]
+  organizations   OrganizationMember[]
+  sessions        Session[]
+  accounts        Account[]
+  collaborations  ContractCollaborator[]
+
+  @@map("users")
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@map("accounts")
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("sessions")
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+  @@map("verificationtokens")
+}
+
+model Organization {
+  id        String   @id @default(cuid())
+  name      String
+  slug      String   @unique
+  plan      String   @default("free") // free, pro, enterprise
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  members   OrganizationMember[]
+  playbooks Playbook[]
+  contracts Contract[]
+
+  @@map("organizations")
+}
+
+model OrganizationMember {
+  id     String           @id @default(cuid())
+  role   OrganizationRole
+  userId String
+  orgId  String
+
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, orgId])
+  @@map("organization_members")
+}
+
+model Playbook {
+  id              String    @id @default(cuid())
+  name            String
+  description     String?
+  contractType    String?
+  isActive        Boolean   @default(true)
+  isTemplate      Boolean   @default(false)
+  version         String    @default("1.0")
+  metadata        Json?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  userId          String
+  organizationId  String?
+  user            User          @relation(fields: [userId], references: [id])
+  organization    Organization? @relation(fields: [organizationId], references: [id])
+  rules           Rule[]
+  reviews         Review[]
+
+  @@map("playbooks")
+}
+
+model Rule {
+  id                String    @id @default(cuid())
+  name              String
+  type              RuleType
+  aiPrompt          String    @db.Text
+  severity          Severity
+  preferredLanguage String?   @db.Text
+  orderIndex        Int
+  isActive          Boolean   @default(true)
+  metadata          Json?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  playbookId        String
+  playbook          Playbook  @relation(fields: [playbookId], references: [id], onDelete: Cascade)
+  changes           Change[]
+
+  @@map("rules")
+}
+
+model Contract {
+  id              String    @id @default(cuid())
+  name            String
+  originalFile    String?   // S3 key
+  content         Json      // Lexical editor state
+  metadata        Json?     // Extracted metadata (file size, type, etc)
+  status          ContractStatus @default(DRAFT)
+  fileSize        Int?      // in bytes
+  checksum        String?   // for integrity checking
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  userId          String
+  organizationId  String?
+  user            User          @relation(fields: [userId], references: [id])
+  organization    Organization? @relation(fields: [organizationId], references: [id])
+  reviews         Review[]
+  versions        ContractVersion[]
+  collaborators   ContractCollaborator[]
+
+  @@map("contracts")
+}
+
+model ContractCollaborator {
+  id          String                   @id @default(cuid())
+  userId      String
+  contractId  String
+  role        CollaboratorRole
+  addedAt     DateTime                 @default(now())
+
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  contract    Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, contractId])
+  @@map("contract_collaborators")
+}
+
+model ContractVersion {
+  id              String    @id @default(cuid())
+  versionNumber   Int
+  content         Json      // Lexical editor state
+  changesSummary  String?
+  createdAt       DateTime  @default(now())
+
+  contractId      String
+  contract        Contract  @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  reviewId        String?
+  review          Review?   @relation(fields: [reviewId], references: [id])
+
+  @@map("contract_versions")
+}
+
+model Review {
+  id              String       @id @default(cuid())
+  status          ReviewStatus @default(PENDING)
+  aiAnalysis      Json?
+  appliedChanges  Json[]
+  riskScore       Float?       // 0-10
+  complianceScore Float?       // 0-10
+  startedAt       DateTime     @default(now())
+  completedAt     DateTime?
+  metadata        Json?
+
+  contractId      String
+  contract        Contract  @relation(fields: [contractId], references: [id])
+  playbookId      String
+  playbook        Playbook  @relation(fields: [playbookId], references: [id])
+  userId          String
+  user            User      @relation(fields: [userId], references: [id])
+  changes         Change[]
+  comments        Comment[]
+  versions        ContractVersion[]
+
+  @@map("reviews")
+}
+
+model Change {
+  id              String       @id @default(cuid())
+  type            ChangeType
+  originalText    String?      @db.Text
+  suggestedText   String?      @db.Text
+  reason          String       @db.Text
+  position        Json         // Lexical position data
+  status          ChangeStatus @default(SUGGESTED)
+  confidence      Float?       // AI confidence score 0-1
+  appliedAt       DateTime?
+  appliedBy       String?
+  metadata        Json?
+
+  reviewId        String
+  review          Review    @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+  ruleId          String?
+  rule            Rule?     @relation(fields: [ruleId], references: [id])
+
+  @@map("changes")
+}
+
+model Comment {
+  id              String    @id @default(cuid())
+  content         String    @db.Text
+  position        Json?     // Lexical position data
+  resolved        Boolean   @default(false)
+  isAiGenerated   Boolean   @default(false)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  reviewId        String
+  review          Review    @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+  userId          String
+  user            User      @relation(fields: [userId], references: [id])
+  parentId        String?
+  parent          Comment?  @relation("CommentReplies", fields: [parentId], references: [id])
+  replies         Comment[] @relation("CommentReplies")
+
+  @@map("comments")
+}
+
+model AuditLog {
+  id          String    @id @default(cuid())
+  action      String    // e.g., "contract_created", "review_completed"
+  entityType  String    // e.g., "contract", "review"
+  entityId    String
+  userId      String?
+  metadata    Json?
+  ipAddress   String?
+  userAgent   String?
+  createdAt   DateTime  @default(now())
+
+  @@map("audit_logs")
+}
+
+model FileUpload {
+  id          String    @id @default(cuid())
+  filename    String
+  originalName String
+  mimeType    String
+  size        Int
+  s3Key       String    @unique
+  uploadedBy  String
+  uploadedAt  DateTime  @default(now())
+
+  @@map("file_uploads")
+}
+
+// Enums
+enum OrganizationRole {
+  OWNER
+  ADMIN
+  MEMBER
+  VIEWER
+}
+
+enum CollaboratorRole {
+  OWNER
+  EDITOR
+  REVIEWER
+  VIEWER
+}
+
+enum RuleType {
+  CLAUSE_CHECK
+  RISK_ASSESSMENT
+  LANGUAGE_PREFERENCE
+  MISSING_PROVISION
+  COMPLIANCE_CHECK
+  TERM_EXTRACTION
+  DEADLINE_CHECK
+}
+
+enum Severity {
+  CRITICAL
+  HIGH
+  MEDIUM
+  LOW
+  INFO
+}
+
+enum ContractStatus {
+  DRAFT
+  UNDER_REVIEW
+  REVIEWED
+  APPROVED
+  SIGNED
+  ARCHIVED
+}
+
+enum ReviewStatus {
+  PENDING
+  IN_PROGRESS
+  COMPLETED
+  ERROR
+  CANCELLED
+}
+
+enum ChangeStatus {
+  SUGGESTED
+  ACCEPTED
+  REJECTED
+  APPLIED
+  IGNORED
+}
+
+enum ChangeType {
+  REPLACEMENT
+  INSERTION
+  DELETION
+  HIGHLIGHT
+  COMMENT_ONLY
+}
